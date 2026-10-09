@@ -20,9 +20,9 @@ def run_web_server():
 
 threading.Thread(target=run_web_server, daemon=True).start()
 
-# --- 2. Environment Variables ---
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# --- 2. Keys Hardcoded ---
+TELEGRAM_BOT_TOKEN = "8733316052:AAHcFiXmu3clwfjTMRx1P6_vN2T_FNblGjA"
+GEMINI_API_KEY = "AQ.Ab8RN6KJrHr8BMcULLiX3YV7u73UQmZkQuixHwJCpK4ozxD7CQ"
 
 genai.configure(api_key=GEMINI_API_KEY)
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
@@ -39,7 +39,7 @@ def get_swing_analysis(symbol: str) -> str:
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    # Technical Indicators (Pure Pandas - No Numba error)
+    # Technical Indicators (Pure Pandas)
     df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
     df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
 
@@ -122,4 +122,5 @@ def handle_swing(message):
     except Exception as e:
         bot.edit_message_text(f"⚠️ Error: {str(e)}", chat_id=wait_msg.chat.id, message_id=wait_msg.message_id)
 
+print("Bot live chal raha hai...")
 bot.infinity_polling()
