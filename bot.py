@@ -1,15 +1,30 @@
 import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import telebot
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import google.generativeai as genai
 
-# Keys server ke secure environment se aayengi
+# --- 1. Render Port Listener (Bot ko 24/7 zinda rakhne ke liye) ---
+class HealthCheck(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is Running Live!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheck)
+    server.serve_forever()
+
+threading.Thread(target=run_web_server, daemon=True).start()
+
+# --- 2. Environment Variables Se Keys Read Karein ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# Setup AI and Telegram
 genai.configure(api_key=GEMINI_API_KEY)
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
@@ -20,7 +35,7 @@ def get_swing_analysis(symbol: str) -> str:
 
     df = yf.download(clean_sym, period="6mo", interval="1d", progress=False)
     if df.empty or len(df) < 50:
-        return f"❌ Stock data nahi mila for {clean_sym}. Symbol check karein."
+        return f"❌ Stock data nahi mila for {clean_sym}. Symbol verify karein."
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
@@ -69,7 +84,7 @@ def get_swing_analysis(symbol: str) -> str:
 def send_welcome(message):
     welcome_text = (
         "👋 AI Swing Trading Bot active hai!\n\n"
-        "Stock ka analysis dekhne ke liye command bhejein:\n"
+        "Stock scan karne ke liye command bhejein:\n"
         "/swing TATAMOTORS\n"
         "/swing RELIANCE\n"
         "/swing INFY"
@@ -91,4 +106,5 @@ def handle_swing(message):
     except Exception as e:
         bot.edit_message_text(f"⚠️ Error: {str(e)}", chat_id=wait_msg.chat.id, message_id=wait_msg.message_id)
 
+print("Bot live chal raha hai...")
 bot.infinity_polling()
