@@ -6,12 +6,12 @@ import yfinance as yf
 import pandas as pd
 import google.generativeai as genai
 
-# --- 1. Keep-Alive Server for Render ---
+# --- 1. Keep-Alive Server (Render Free Tier ke liye) ---
 class HealthCheck(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is Live!")
+        self.wfile.write(b"Bot is Live and Running!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -20,22 +20,35 @@ def run_web_server():
 
 threading.Thread(target=run_web_server, daemon=True).start()
 
-# --- 2. Keys Hardcoded ---
-TELEGRAM_BOT_TOKEN = "8733316052:AAHcFiXmu3clwfjTMRx1P6_vN2T_FNblGjA"
-GEMINI_API_KEY = "AQ.Ab8RN6KJrHr8BMcULLiX3YV7u73UQmZkQuixHwJCpK4ozxD7CQ"
+# --- 2. API Keys Configuration ---
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8733316052:AAHcFiXmu3clwfjTMRx1P6_vN2T_FNblGjA")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6KJrHr8BMcULLiX3YV7u73UQmZkQuixHwJCpK4ozxD7CQ")
 
 genai.configure(api_key=GEMINI_API_KEY)
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
 def get_swing_analysis(symbol: str) -> str:
     clean_sym = symbol.strip().upper()
-    if not clean_sym.endswith(".NS") and not clean_sym.endswith(".BO"):
-        clean_sym += ".NS"
+    
+    # NSE stock ke liye .NS lagana
+    if not clean_sym.endswith(".NS") and not clean_sym.endswith(".BO") and not ("=" in clean_sym):
+        search_sym = f"{clean_sym}.NS"
+    else:
+        search_sym = clean_sym
 
-    df = yf.download(clean_sym, period="6mo", interval="1d", progress=False)
-    if df.empty or len(df) < 50:
-        return f"❌ Stock data nahi mila for {clean_sym}. Symbol verify karein."
+    # Reliable data fetch using Ticker history
+    stock_ticker = yf.Ticker(search_sym)
+    df = stock_ticker.history(period="6mo", interval="1d")
 
+    # Agar .NS par na mile toh direct symbol check karein
+    if df.empty:
+        stock_ticker = yf.Ticker(clean_sym)
+        df = stock_ticker.history(period="6mo", interval="1d")
+
+    if df.empty or len(df) < 30:
+        return f"❌ Stock data nahi mila for `{search_sym}`.\nKripya NSE symbol verify karein (jaise: TATAMOTORS, RELIANCE, INFY)."
+
+    # MultiIndex column flatten agar ho
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
@@ -59,7 +72,7 @@ def get_swing_analysis(symbol: str) -> str:
     tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
     df['ATR'] = tr.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
 
-    # Volume 20 SMA
+    # 20-Day Average Volume
     df['Vol_SMA20'] = df['Volume'].rolling(window=20).mean()
 
     latest = df.iloc[-1]
@@ -67,8 +80,8 @@ def get_swing_analysis(symbol: str) -> str:
 
     prompt = f"""
     Act as a professional swing trader for Indian stock markets.
-    Analyze this technical setup for {clean_sym} on Daily candles:
-    - Current Market Price: ₹{latest['Close']:.2f} (Prev Close: ₹{prev['Close']:.2f})
+    Analyze this technical setup for {search_sym} on Daily candles:
+    - Current Market Price: ₹{latest['Close']:.2f} (Previous Close: ₹{prev['Close']:.2f})
     - 20 EMA: ₹{latest['EMA_20']:.2f}
     - 50 EMA: ₹{latest['EMA_50']:.2f}
     - RSI (14): {latest['RSI']:.2f}
@@ -81,7 +94,7 @@ def get_swing_analysis(symbol: str) -> str:
     🛑 Stop Loss: [Exact price level based on ATR / Swing support]
     🏁 Target 1: [Price]
     🏁 Target 2: [Price for 1:2 Risk-to-Reward]
-    ⚡ Technical Logic: [2-3 sentences]
+    ⚡ Technical Logic: [2-3 sentences explaining setup]
     ⚠️ Invalidation: [Condition under which trade is cancelled]
     """
 
@@ -89,7 +102,7 @@ def get_swing_analysis(symbol: str) -> str:
     response = model.generate_content(prompt)
 
     header = (
-        f"📊 Analysis: {clean_sym}\n"
+        f"📊 Analysis: {search_sym}\n"
         f"• CMP: ₹{latest['Close']:.2f}\n"
         f"• RSI: {latest['RSI']:.1f} | 20 EMA: ₹{latest['EMA_20']:.1f}\n"
         f"-----------------------------------\n\n"
@@ -115,7 +128,7 @@ def handle_swing(message):
         return
 
     stock = parts[1]
-    wait_msg = bot.reply_to(message, f"⏳ {stock} ka technical setup calculate ho raha hai...")
+    wait_msg = bot.reply_to(message, f"⏳ {stock} ka setup calculate ho raha hai...")
     try:
         report = get_swing_analysis(stock)
         bot.edit_message_text(report, chat_id=wait_msg.chat.id, message_id=wait_msg.message_id)
