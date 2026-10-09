@@ -4,15 +4,14 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import telebot
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
 import google.generativeai as genai
 
-# --- 1. Render Port Listener (Bot ko 24/7 zinda rakhne ke liye) ---
+# --- 1. Keep-Alive Server for Render ---
 class HealthCheck(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is Running Live!")
+        self.wfile.write(b"Bot is Live!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -21,7 +20,7 @@ def run_web_server():
 
 threading.Thread(target=run_web_server, daemon=True).start()
 
-# --- 2. Environment Variables Se Keys Read Karein ---
+# --- 2. Environment Variables ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
@@ -40,11 +39,28 @@ def get_swing_analysis(symbol: str) -> str:
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    df['EMA_20'] = ta.ema(df['Close'], length=20)
-    df['EMA_50'] = ta.ema(df['Close'], length=50)
-    df['RSI'] = ta.rsi(df['Close'], length=14)
-    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
-    df['Vol_SMA20'] = ta.sma(df['Volume'], length=20)
+    # Technical Indicators (Pure Pandas - No Numba error)
+    df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
+    df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
+
+    # RSI (14)
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
+    # ATR (14)
+    hl = df['High'] - df['Low']
+    hc = (df['High'] - df['Close'].shift()).abs()
+    lc = (df['Low'] - df['Close'].shift()).abs()
+    tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
+    df['ATR'] = tr.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+
+    # Volume 20 SMA
+    df['Vol_SMA20'] = df['Volume'].rolling(window=20).mean()
 
     latest = df.iloc[-1]
     prev = df.iloc[-2]
@@ -59,7 +75,7 @@ def get_swing_analysis(symbol: str) -> str:
     - ATR (14): ₹{latest['ATR']:.2f}
     - Volume: {latest['Volume']:,} vs 20-Day Avg Volume: {latest['Vol_SMA20']:,}
 
-    Output the plan strictly in this format:
+    Output strictly in this format:
     🎯 Bias: [Bullish / Bearish / Neutral]
     📍 Entry Range: [Price bracket]
     🛑 Stop Loss: [Exact price level based on ATR / Swing support]
@@ -106,5 +122,4 @@ def handle_swing(message):
     except Exception as e:
         bot.edit_message_text(f"⚠️ Error: {str(e)}", chat_id=wait_msg.chat.id, message_id=wait_msg.message_id)
 
-print("Bot live chal raha hai...")
 bot.infinity_polling()
